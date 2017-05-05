@@ -1,7 +1,15 @@
 #[macro_use]
+extern crate derive_new;
+
+#[macro_use]
 extern crate error_chain;
 extern crate regex;
 extern crate reqwest;
+extern crate serde;
+
+#[macro_use]
+extern crate serde_derive;
+extern crate serde_json;
 extern crate structopt;
 
 #[macro_use]
@@ -10,7 +18,6 @@ extern crate url;
 
 use regex::Regex;
 use reqwest::Client;
-use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::iter;
 use std::process;
@@ -19,6 +26,14 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 use structopt::StructOpt;
 use url::Url;
+
+#[derive(Serialize, Deserialize, Clone, Debug, new)]
+#[serde(rename_all = "camelCase")]
+struct ExecReq {
+    id: String,
+    cmd_id_re: String,
+    cmd: String,
+}
 
 mod errors {
     error_chain! {
@@ -62,7 +77,7 @@ fn run() -> Result<()> {
         iter::repeat(())
             .any(|_| {
                 let match_fn = || -> Result<bool> {
-                    let mut guard = m.lock().unwrap();
+                    let guard = m.lock().unwrap();
 //                         .chain_err(|| "Unable to get mutex lock in thread")?;
 
                     let (guard, _) = cv.wait_timeout(guard, interval).unwrap();
@@ -78,6 +93,31 @@ fn run() -> Result<()> {
                     // not interrupted
                     Ok(false) => {
                         // sends command here
+                        let client = Client::new().unwrap();
+
+                        let res = client.post(config.dst_url.clone())
+                            .json(&ExecReq::new(
+                                config.name.clone(),
+                                config.regex_pattern.to_string(),
+                                config.cmd.clone()))
+                            .send();
+
+                        match res {
+                            Ok(mut resp) => {
+                                if resp.status().is_success() {
+                                    let mut content = String::new();
+                                    let _ = resp.read_to_string(&mut content);
+                                    println!("Success in sending command, body: {} ", content);
+                                } else {
+                                    println!("Success in sending command, but returned status code: {:?}", resp.status());
+                                }
+                            },
+
+                            Err(e) => {
+                                println!("Failed to send command: {}", e);
+                            },
+                        }
+
                         false
                     },
 
@@ -114,8 +154,11 @@ fn run() -> Result<()> {
     cv.notify_one();
     println!("Waiting for child thread to terminate...");
 
-    child.join();
-//         .chain_err(|| "Unable to join child thread")
+    if let Err(e) = child.join() {
+        println!("Error joining child thread: {:?}", e);
+    }
+
+    //    .chain_err(|| "Unable to join child thread")
 
     Ok(())
 }

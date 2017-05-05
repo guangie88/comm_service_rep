@@ -1,0 +1,12 @@
+[package]
+name = "comm_service_rep"
+version = "0.1.0"
+authors = ["Chen Weiguang <chen.weiguang@gmail.com>"]
+
+[dependencies]
+error-chain = "^0.10.0"
+regex = "^0.2.1"
+reqwest = "^0.5.1"
+structopt = "^0.0.3"
+structopt-derive = "^0.0.3"
+url = "^1.4.0"

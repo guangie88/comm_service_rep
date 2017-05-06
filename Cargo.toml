@@ -2,7 +2,6 @@
 name = "comm_service_rep"
 version = "0.1.0"
 authors = ["Chen Weiguang <chen.weiguang@gmail.com>"]
-build = "build.rs"
 
 [dependencies]
 derive-new = "^0.4.0"

@@ -37,8 +37,7 @@ struct ExecReq {
 
 mod errors {
     error_chain! {
-        errors {
-        }
+        errors {}
     }
 }
 
@@ -77,11 +76,15 @@ fn run() -> Result<()> {
         iter::repeat(())
             .any(|_| {
                 let match_fn = || -> Result<bool> {
-                    let guard = m.lock().unwrap();
-//                         .chain_err(|| "Unable to get mutex lock in thread")?;
+                    let guard = match m.lock() {
+                        Ok(guard) => guard,
+                        Err(e) => bail!("Unable to get mutex lock in thread: {}", e),
+                    };
 
-                    let (guard, _) = cv.wait_timeout(guard, interval).unwrap();
-//                         .chain_err(|| "Unable to wait for condvar timeout")?;
+                    let (guard, _) = match cv.wait_timeout(guard, interval) {
+                        Ok(cv_res) => cv_res,
+                        Err(e) => bail!("Unable to wait for condvar timeout: {}", e),
+                    };
                     
                     let is_interrupted = *guard;
                     println!("Is interrupted: {}", is_interrupted);
@@ -92,31 +95,47 @@ fn run() -> Result<()> {
                 match match_fn() {
                     // not interrupted
                     Ok(false) => {
-                        // sends command here
-                        let client = Client::new().unwrap();
+                        // sends command here in a separate thread to preserve timing
+                        let dst_url = config.dst_url.clone();
+                        let name = config.name.clone();
+                        let regex_pattern = config.regex_pattern.to_string();
+                        let cmd = config.cmd.clone();
 
-                        let res = client.post(config.dst_url.clone())
-                            .json(&ExecReq::new(
-                                config.name.clone(),
-                                config.regex_pattern.to_string(),
-                                config.cmd.clone()))
-                            .send();
+                        // detach the HTTP client thread
+                        thread::spawn(move || {
+                            let client_fn = || -> Result<String> {
+                                let client = match Client::new() {
+                                    Ok(client) => client,
+                                    Err(e) => bail!("Error creating HTTP client: {}", e),
+                                };
 
-                        match res {
-                            Ok(mut resp) => {
-                                if resp.status().is_success() {
-                                    let mut content = String::new();
-                                    let _ = resp.read_to_string(&mut content);
-                                    println!("Success in sending command, body: {} ", content);
-                                } else {
-                                    println!("Success in sending command, but returned status code: {:?}", resp.status());
+                                let res = client.post(dst_url)
+                                    .json(&ExecReq::new(name, regex_pattern, cmd))
+                                    .send();
+
+                                match res {
+                                    Ok(mut resp) => {
+                                        if resp.status().is_success() {
+                                            let mut content = String::new();
+                                            let _ = resp.read_to_string(&mut content);
+
+                                            Ok(format!("Success in sending command, body: {} ", content))
+                                        } else {
+                                            bail!("Success in sending command, but returned status code: {:?}", resp.status());
+                                        }
+                                    },
+
+                                    Err(e) => {
+                                        bail!("Failed to send command: {}", e);
+                                    },
                                 }
-                            },
+                            };
 
-                            Err(e) => {
-                                println!("Failed to send command: {}", e);
-                            },
-                        }
+                            match client_fn() {
+                                Ok(msg) => println!("{}", msg),
+                                Err(e) => println!("HTTP thread error: {}", e),
+                            }
+                        });
 
                         false
                     },
@@ -145,10 +164,13 @@ fn run() -> Result<()> {
 
     {
         // must scope to lock as little as possible
-        let mut guard = m.lock().unwrap();
-    //         .chain_err(|| "Unable to get mutex lock in main thread")?;
+        match m.lock() {
+            Ok(mut guard) => {
+                *guard = true;
+            },
 
-        *guard = true;
+            Err(e) => bail!("Unable to get mutex lock in main thread: {}", e),
+        }
     }
 
     cv.notify_one();
@@ -157,8 +179,6 @@ fn run() -> Result<()> {
     if let Err(e) = child.join() {
         println!("Error joining child thread: {:?}", e);
     }
-
-    //    .chain_err(|| "Unable to join child thread")
 
     Ok(())
 }
